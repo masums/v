@@ -213,11 +213,11 @@ fn (mut g Gen) gen_fn_decl(node ast.FnDecl, skip bool) {
 	//
 	if is_live_wrap {
 		if is_livemain {
-			g.definitions.write('$type_name (* $impl_fn_name)(')
+			g.definitions.write_string('$type_name (* $impl_fn_name)(')
 			g.write('$type_name no_impl_${name}(')
 		}
 		if is_liveshared {
-			g.definitions.write('$type_name ${impl_fn_name}(')
+			g.definitions.write_string('$type_name ${impl_fn_name}(')
 			g.write('$type_name ${impl_fn_name}(')
 		}
 	} else {
@@ -229,7 +229,7 @@ fn (mut g Gen) gen_fn_decl(node ast.FnDecl, skip bool) {
 				// If we are building vlib/builtin, we need all private functions like array_get
 				// to be public, so that all V programs can access them.
 				g.write('VV_LOCAL_SYMBOL ')
-				g.definitions.write('VV_LOCAL_SYMBOL ')
+				g.definitions.write_string('VV_LOCAL_SYMBOL ')
 			}
 		}
 		fn_header := if msvc_attrs.len > 0 {
@@ -237,7 +237,7 @@ fn (mut g Gen) gen_fn_decl(node ast.FnDecl, skip bool) {
 		} else {
 			'$type_name ${name}('
 		}
-		g.definitions.write(fn_header)
+		g.definitions.write_string(fn_header)
 		g.write(fn_header)
 	}
 	arg_start_pos := g.out.len
@@ -301,14 +301,14 @@ fn (mut g Gen) gen_fn_decl(node ast.FnDecl, skip bool) {
 		default_expr := g.type_default(node.return_type)
 		// TODO: perf?
 		if default_expr == '{0}' {
-			if node.return_type.idx() == 1 && node.return_type.has_flag(.optional) {
-				// The default return for anonymous functions that return `?,
-				// should have .ok = true set, otherwise calling them with
-				// optfn() or { panic(err) } will cause a panic:
-				g.writeln('\treturn (Option_void){.ok = true};')
-			} else {
-				g.writeln('\treturn ($type_name)$default_expr;')
-			}
+			// if node.return_type.idx() == 1 && node.return_type.has_flag(.optional) {
+			// 	// The default return for anonymous functions that return `?,
+			// 	// should have .ok = true set, otherwise calling them with
+			// 	// optfn() or { panic(err) } will cause a panic:
+			// 	g.writeln('\treturn (Option_void){0};')
+			// } else {
+			g.writeln('\treturn ($type_name)$default_expr;')
+			// }
 		} else {
 			g.writeln('\treturn $default_expr;')
 		}
@@ -351,6 +351,10 @@ fn (mut g Gen) write_defer_stmts_when_needed() {
 fn (mut g Gen) fn_args(args []table.Param, is_variadic bool) ([]string, []string) {
 	mut fargs := []string{}
 	mut fargtypes := []string{}
+	if args.len == 0 {
+		// in C, `()` is untyped, unlike `(void)`
+		g.write('void')
+	}
 	for i, arg in args {
 		caname := if arg.name == '_' { g.new_tmp_var() } else { c_name(arg.name) }
 		typ := g.unwrap_generic(arg.typ)
@@ -361,32 +365,33 @@ fn (mut g Gen) fn_args(args []table.Param, is_variadic bool) ([]string, []string
 			func := info.func
 			if !info.is_anon {
 				g.write(arg_type_name + ' ' + caname)
-				g.definitions.write(arg_type_name + ' ' + caname)
+				g.definitions.write_string(arg_type_name + ' ' + caname)
 				fargs << caname
 				fargtypes << arg_type_name
 			} else {
 				g.write('${g.typ(func.return_type)} (*$caname)(')
-				g.definitions.write('${g.typ(func.return_type)} (*$caname)(')
+				g.definitions.write_string('${g.typ(func.return_type)} (*$caname)(')
 				g.fn_args(func.params, func.is_variadic)
 				g.write(')')
-				g.definitions.write(')')
+				g.definitions.write_string(')')
 			}
 		} else {
 			s := '$arg_type_name $caname'
 			g.write(s)
-			g.definitions.write(s)
+			g.definitions.write_string(s)
 			fargs << caname
 			fargtypes << arg_type_name
 		}
 		if i < args.len - 1 {
 			g.write(', ')
-			g.definitions.write(', ')
+			g.definitions.write_string(', ')
 		}
 	}
 	return fargs, fargtypes
 }
 
 fn (mut g Gen) call_expr(node ast.CallExpr) {
+	// g.write('/*call expr*/')
 	// NOTE: everything could be done this way
 	// see my comment in parser near anon_fn
 	if node.left is ast.AnonFn {
@@ -404,14 +409,14 @@ fn (mut g Gen) call_expr(node ast.CallExpr) {
 	defer {
 		g.inside_call = false
 	}
-	gen_or := node.or_block.kind != .absent && !g.is_autofree
-	// if gen_or {
-	// g.writeln('/*start*/')
-	// }
-	is_gen_or_and_assign_rhs := gen_or && g.is_assign_rhs
-	cur_line := if is_gen_or_and_assign_rhs && !g.is_autofree {
+	gen_or := node.or_block.kind != .absent // && !g.is_autofree
+	is_gen_or_and_assign_rhs := gen_or && !g.discard_or_result
+	cur_line := if is_gen_or_and_assign_rhs { // && !g.is_autofree {
+		// `x := foo() or { ...}`
+		// cut everything that has been generated to prepend optional variable creation
 		line := g.go_before_stmt(0)
-		g.out.write(tabs[g.indent])
+		g.out.write_string(tabs[g.indent])
+		// g.write('/*is_gen_or_and_assign_rhs*/')
 		line
 	} else {
 		''
@@ -433,21 +438,21 @@ fn (mut g Gen) call_expr(node ast.CallExpr) {
 		g.fn_call(node)
 	}
 	if gen_or { // && !g.autofree {
-		if !g.is_autofree {
-			g.or_block(tmp_opt, node.or_block, node.return_type)
-		}
+		// if !g.is_autofree {
+		g.or_block(tmp_opt, node.or_block, node.return_type)
+		//}
 		if is_gen_or_and_assign_rhs {
 			unwrapped_typ := node.return_type.clear_flag(.optional)
 			unwrapped_styp := g.typ(unwrapped_typ)
 			if unwrapped_typ == table.void_type {
 				g.write('\n $cur_line')
 			} else if g.table.get_type_symbol(node.return_type).kind == .multi_return {
-				g.write('\n $cur_line $tmp_opt')
+				g.write('\n $cur_line $tmp_opt /*U*/')
 			} else {
-				g.write('\n $cur_line *($unwrapped_styp*)${tmp_opt}.data')
+				if !g.inside_const {
+					g.write('\n $cur_line *($unwrapped_styp*)${tmp_opt}.data')
+				}
 			}
-			// g.write('\n /*call_expr cur_line:*/ $cur_line /*C*/ $tmp_opt /*end*/')
-			// g.insert_before_stmt('\n /* VVV */ $tmp_opt')
 		}
 	}
 }
@@ -526,6 +531,10 @@ fn (mut g Gen) method_call(node ast.CallExpr) {
 			}
 			'index' {
 				g.gen_array_index(node)
+				return
+			}
+			'wait' {
+				g.gen_array_wait(node)
 				return
 			}
 			else {}
@@ -639,7 +648,21 @@ fn (mut g Gen) method_call(node ast.CallExpr) {
 		if !node.left_type.has_flag(.shared_f) {
 			g.write('/*rec*/*')
 		}
+	} else if !is_range_slice && node.from_embed_type == 0 && node.name != 'str' {
+		diff := node.left_type.nr_muls() - node.receiver_type.nr_muls()
+		if diff < 0 {
+			// TODO
+			// g.write('&')
+		} else if diff > 0 {
+			g.write('/*diff=$diff*/')
+			g.write([]byte{len: diff, init: `*`}.bytestr())
+		}
 	}
+
+	// if node.left_type.idx() != node.receiver_type.idx() {
+	// 	println('${g.typ(node.left_type)} ${g.typ(node.receiver_type)}')
+	// }
+
 	if g.is_autofree && node.free_receiver && !g.inside_lambda && !g.is_builtin_mod {
 		// The receiver expression needs to be freed, use the temp var.
 		fn_name := node.name.replace('.', '_')
@@ -699,7 +722,13 @@ fn (mut g Gen) fn_call(node ast.CallExpr) {
 		}
 	}
 	mut name := node.name
-	is_print := name in ['print', 'println', 'eprint', 'eprintln']
+	if node.name == 'error' {
+		name = 'error2'
+	}
+	if node.name == 'error_with_code' {
+		name = 'error_with_code2'
+	}
+	is_print := name in ['print', 'println', 'eprint', 'eprintln', 'panic']
 	print_method := name
 	is_json_encode := name == 'json.encode'
 	is_json_encode_pretty := name == 'json.encode_pretty'
@@ -747,7 +776,7 @@ fn (mut g Gen) fn_call(node ast.CallExpr) {
 			g.is_js_call = false
 			g.writeln(');')
 			tmp2 = g.new_tmp_var()
-			g.writeln('Option_$typ $tmp2 = $fn_name ($json_obj);')
+			g.writeln('Option2_$typ $tmp2 = $fn_name ($json_obj);')
 		}
 		if !g.is_autofree {
 			g.write('cJSON_Delete($json_obj); //del')
@@ -803,9 +832,9 @@ fn (mut g Gen) fn_call(node ast.CallExpr) {
 				// tmps << tmp
 				g.write('string $tmp = ')
 				g.gen_expr_to_string(expr, typ)
-				g.writeln('; ${print_method}($tmp); string_free(&$tmp);')
+				g.writeln('; ${c_name(print_method)}($tmp); string_free(&$tmp);')
 			} else {
-				g.write('${print_method}(')
+				g.write('${c_name(print_method)}(')
 				g.gen_expr_to_string(expr, typ)
 				g.write(')')
 			}

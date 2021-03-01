@@ -55,7 +55,7 @@ pub fn (mut p Parser) parse_array_type() table.Type {
 	}
 	mut nr_dims := 1
 	// detect attr
-	not_attr := p.peek_tok.kind != .name && p.peek_tok2.kind !in [.semicolon, .rsbr]
+	not_attr := p.peek_tok.kind != .name && p.peek_token(2).kind !in [.semicolon, .rsbr]
 	for p.tok.kind == .lsbr && not_attr {
 		p.next()
 		p.check(.rsbr)
@@ -106,7 +106,8 @@ pub fn (mut p Parser) parse_map_type() table.Type {
 }
 
 pub fn (mut p Parser) parse_chan_type() table.Type {
-	if p.peek_tok.kind != .name && p.peek_tok.kind != .key_mut && p.peek_tok.kind != .amp {
+	if p.peek_tok.kind != .name && p.peek_tok.kind != .key_mut && p.peek_tok.kind != .amp
+		&& p.peek_tok.kind != .lsbr {
 		p.next()
 		return table.chan_type
 	}
@@ -115,6 +116,31 @@ pub fn (mut p Parser) parse_chan_type() table.Type {
 	is_mut := p.tok.kind == .key_mut
 	elem_type := p.parse_type()
 	idx := p.table.find_or_register_chan(elem_type, is_mut)
+	return table.new_type(idx)
+}
+
+pub fn (mut p Parser) parse_thread_type() table.Type {
+	is_opt := p.peek_tok.kind == .question
+	if is_opt {
+		p.next()
+	}
+	if p.peek_tok.kind != .name && p.peek_tok.kind != .key_mut && p.peek_tok.kind != .amp
+		&& p.peek_tok.kind != .lsbr {
+		p.next()
+		if is_opt {
+			mut ret_type := table.void_type
+			ret_type = ret_type.set_flag(.optional)
+			idx := p.table.find_or_register_thread(ret_type)
+			return table.new_type(idx)
+		} else {
+			return table.thread_type
+		}
+	}
+	if !is_opt {
+		p.next()
+	}
+	ret_type := p.parse_type()
+	idx := p.table.find_or_register_thread(ret_type)
 	return table.new_type(idx)
 }
 
@@ -318,6 +344,9 @@ pub fn (mut p Parser) parse_any_type(language table.Language, is_ptr bool, check
 			}
 			if name == 'chan' {
 				return p.parse_chan_type()
+			}
+			if name == 'thread' {
+				return p.parse_thread_type()
 			}
 			defer {
 				p.next()

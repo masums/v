@@ -300,8 +300,9 @@ pub:
 // anonymous function
 pub struct AnonFn {
 pub mut:
-	decl FnDecl
-	typ  table.Type // the type of anonymous fn. Both .typ and .decl.name are auto generated
+	decl    FnDecl
+	typ     table.Type // the type of anonymous fn. Both .typ and .decl.name are auto generated
+	has_gen bool       // has been generated
 }
 
 // function or method declaration
@@ -360,9 +361,8 @@ pub:
 // function or method call expr
 pub struct CallExpr {
 pub:
-	pos  token.Position
-	left Expr // `user` in `user.register()`
-	mod  string
+	pos token.Position
+	mod string
 pub mut:
 	name               string // left.name()
 	is_method          bool
@@ -371,6 +371,7 @@ pub mut:
 	expected_arg_types []table.Type
 	language           table.Language
 	or_block           OrExpr
+	left               Expr       // `user` in `user.register()`
 	left_type          table.Type // type of `user`
 	receiver_type      table.Type // User
 	return_type        table.Type
@@ -722,6 +723,7 @@ pub:
 	stmts   []Stmt
 	kind    CompForKind
 	pos     token.Position
+	typ_pos token.Position
 pub mut:
 	// expr    Expr
 	typ table.Type
@@ -766,6 +768,7 @@ pub:
 	has_cond bool
 	inc      Stmt // i++; i += 2
 	has_inc  bool
+	is_multi bool // for a,b := 0,1; a < 10; a,b = a+b, a {...}
 	stmts    []Stmt
 	pos      token.Position
 pub mut:
@@ -942,6 +945,7 @@ pub:
 	elem_type_pos token.Position // `Type` in []Type{} position
 	exprs         []Expr      // `[expr, expr]` or `[expr]Type{}` for fixed array
 	ecmnts        [][]Comment // optional iembed comments after each expr
+	pre_cmnts     []Comment
 	is_fixed      bool
 	has_val       bool // fixed size literal `[expr, expr]!`
 	mod           string
@@ -978,9 +982,11 @@ pub mut:
 
 pub struct MapInit {
 pub:
-	pos  token.Position
-	keys []Expr
-	vals []Expr
+	pos       token.Position
+	keys      []Expr
+	vals      []Expr
+	comments  [][]Comment // comments after key-value pairs
+	pre_cmnts []Comment   // comments before the first key-value pair
 pub mut:
 	typ        table.Type
 	key_type   table.Type
@@ -1274,7 +1280,9 @@ pub fn (expr Expr) is_lvalue() bool {
 pub fn (expr Expr) is_expr() bool {
 	match expr {
 		IfExpr { return expr.is_expr }
+		LockExpr { return expr.is_expr }
 		MatchExpr { return expr.is_expr }
+		SelectExpr { return expr.is_expr }
 		else {}
 	}
 	return true
@@ -1336,11 +1344,8 @@ pub fn (stmt Stmt) position() token.Position {
 	match stmt {
 		AssertStmt, AssignStmt, Block, BranchStmt, CompFor, ConstDecl, DeferStmt, EnumDecl, ExprStmt,
 		FnDecl, ForCStmt, ForInStmt, ForStmt, GotoLabel, GotoStmt, Import, Return, StructDecl,
-		GlobalDecl, HashStmt, InterfaceDecl, Module, SqlStmt {
+		GlobalDecl, HashStmt, InterfaceDecl, Module, SqlStmt, GoStmt {
 			return stmt.pos
-		}
-		GoStmt {
-			return stmt.call_expr.pos
 		}
 		TypeDecl {
 			match stmt {
